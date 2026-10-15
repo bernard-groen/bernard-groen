@@ -147,7 +147,8 @@ def signal_tables(events_df: pd.DataFrame, out_dir: str, cfg: Config) -> dict[st
     qualifying = events_df[(events_df["confidence"] >= cfg.min_confidence)
                            & (events_df["suspect_product"] != UNSPECIFIED_RSV)]
     tables = {}
-    for level in ("pt", "soc"):
+    levels = ["pt"] + (["soc"] if events_df["soc_name"].fillna("").astype(str).str.len().gt(0).any() else [])
+    for level in levels:
         df = compute_prr(qualifying, cfg.target_product, cfg.comparator_products, level,
                          cfg.prr_threshold, cfg.chi2_threshold, cfg.min_cases)
         df.to_csv(os.path.join(out_dir, f"prr_{level}.csv"), index=False)

@@ -1,0 +1,24 @@
+post_id,pt,suspect_product
+S001,Injection site pain,Abrysvo
+S001,Pyrexia,Abrysvo
+S001,Fatigue,Abrysvo
+S002,,
+S003,Guillain-Barre syndrome,Abrysvo
+S004,,
+S005,Headache,Arexvy
+S005,Fatigue,Arexvy
+S006,Chills,Shingles vaccine
+S006,Pyrexia,Shingles vaccine
+S006,Myalgia,Shingles vaccine
+S007,,
+S008,Syncope,Abrysvo
+S009,Premature labour,Abrysvo
+S010,Respiratory syncytial virus infection,Abrysvo
+S011,Headache,Influenza vaccine
+S011,Injection site pain,Influenza vaccine
+S012,Pyrexia,COVID-19 vaccine
+S012,Arthralgia,COVID-19 vaccine
+S013,Headache,Abrysvo
+S013,Arthralgia,Abrysvo
+S014,Injection site pain,Arexvy
+S015,,

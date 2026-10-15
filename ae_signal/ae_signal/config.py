@@ -42,8 +42,9 @@ class RoleConfig:
 
 @dataclass
 class Config:
+    # ASCII distribution directory, or an LLT/PT table (.xlsx/.csv)
     meddra_dir: str
-    meddra_version: str = "26.1"
+    meddra_version: str = "28.0"
 
     coders: RoleConfig = field(default_factory=lambda: RoleConfig(n_agents=3))
     verifiers: RoleConfig = field(default_factory=lambda: RoleConfig(n_agents=2, effort="high"))

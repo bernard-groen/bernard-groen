@@ -7,7 +7,8 @@ confidence weighting, and produces standard data tables including
 
 - **Target product:** Abrysvo (Pfizer RSV vaccine, RSVpreF)
 - **Purpose:** signal intelligence only. This is not an ICSR (individual case safety report) intake system.
-- **Dictionary:** MedDRA 26.1 ASCII files (licensed, so they are not included in this repo)
+- **Dictionary:** MedDRA 28.0 (licensed, so it is not included in this repo). Two formats are accepted: the
+  `MedDRA_28_0_AllPTsLLTs.xlsx` LLT→PT table, or the standard ASCII distribution (`llt.asc` and `mdhier.asc`)
 - **Status:** experimental. Not validated for GxP use.
 
 ## How it works
@@ -46,7 +47,8 @@ posts file ──► prefilter ──► CODERS (n=3, parallel, each with a sear
   - `p_coding` = mean(verifier coding vote share, rater p_coding_accuracy, coder agreement)
   - `confidence` = p_ae × p_product × p_coding
   - `p_temporal` is reported but not multiplied in, because most posts give no timing.
-- **Version pinning.** Each event row records the MedDRA version it was coded with.
+- **Version pinning.** Each event row records the MedDRA version it was coded with. The version is read from
+  `meddra_release.asc`, or from the file name for the xlsx table.
 - **Resumable.** Each processed post is appended to `audit.jsonl`, including the raw output of
   every agent. Re-running the same command skips posts that are already done. The audit file
   is also your audit trail.
@@ -83,10 +85,10 @@ pip install -r requirements.txt
 export ANTHROPIC_API_KEY=...
 
 # Pilot first: 50 posts
-python -m ae_signal run --posts posts.csv --meddra-dir /path/to/MedDRA_26_1/MedAscii --out outputs --limit 50
+python -m ae_signal run --posts posts.csv --meddra MedDRA_28_0_AllPTsLLTs.xlsx --out outputs --limit 50
 
 # Full run (resumable; re-run the same command after an interruption)
-python -m ae_signal run --posts posts.csv --meddra-dir /path/to/MedAscii --out outputs \
+python -m ae_signal run --posts posts.csv --meddra MedDRA_28_0_AllPTsLLTs.xlsx --out outputs \
     --coders 3 --verifiers 2 --raters 2 --concurrency 8
 
 # Re-score PRR at a different confidence threshold or comparator set (no API calls)
@@ -99,8 +101,14 @@ python -m pytest
 **Input:** CSV, JSONL or XLSX with a `text` column. `post_id`, `platform`, `created_at` and
 any other columns are optional and are carried through to `posts.csv`.
 
-**MedDRA directory:** the folder containing `llt.asc` and `mdhier.asc` (and optionally
-`meddra_release.asc`, which is used to confirm the version).
+**MedDRA (`--meddra`):** either of these.
+
+- **The LLT/PT table** (`MedDRA_28_0_AllPTsLLTs.xlsx`, columns `LLT` and `PT`). It has no codes
+  or hierarchy, so term names serve as identifiers and **the SOC-level PRR table is skipped**.
+  The table mixes English and Spanish LLTs, and both map to English PTs. It loads in about
+  12 s, and each search takes milliseconds.
+- **The ASCII distribution:** the folder containing `llt.asc` and `mdhier.asc`. This adds
+  MedDRA codes and the full LLT→PT→HLT→HLGT→SOC hierarchy.
 
 ### Outputs (in `--out`)
 
@@ -111,6 +119,54 @@ any other columns are optional and are carried through to `posts.csv`.
 | `event_summary.csv` | Counts and mean confidence by product × SOC × PT |
 | `prr_pt.csv`, `prr_soc.csv` | 2×2 counts, PRR, 95% CI, χ², weighted PRR, signal flag |
 | `audit.jsonl` | Raw agent outputs per post, with timestamp and MedDRA version |
+
+## Measuring performance: precision, recall, F1
+
+```bash
+python -m ae_signal evaluate --out outputs --gold gold.csv --meddra MedDRA_28_0_AllPTsLLTs.xlsx
+```
+
+The gold file is the human reference standard, with one row per adverse event. Every post you
+evaluate must appear in it. Posts with no adverse event get a row with an empty `pt`:
+
+```
+post_id,pt,suspect_product
+S001,Vaccination site pain,Abrysvo
+S001,Pyrexia,Abrysvo
+S002,,
+```
+
+`pt` can be a PT or an LLT; an LLT is mapped to its PT. `suspect_product` is used only by
+the strict metric. `data/gold_synthetic.csv` is an example that matches the synthetic posts.
+
+| Output | What it answers |
+|---|---|
+| `eval_summary.csv` | Precision, recall and F1 at the operating threshold (`--min-confidence`) and at the best-F1 threshold, at three levels (see below). Event F1 has a bootstrap 95% CI (posts resampled) |
+| `eval_threshold_sweep.csv` | The same metrics at confidence thresholds 0.00–0.95: the precision/recall trade-off |
+| `eval_calibration.csv` | Is the confidence weighting honest? Observed precision per confidence band |
+| `eval_per_pt.csv` | Precision, recall and F1 for each PT, to show which events the system codes poorly |
+| `eval_agents.csv` | Competency of each agent. Each **coder** is scored on its own; each **verifier** as an accept/reject filter on candidates; each **rater** as a ranker (AUROC, Brier score) |
+| `eval_errors.csv` | Every false positive and false negative, with the post text. False negatives caused by the prefilter are labelled as such |
+
+The three levels in `eval_summary.csv` are:
+
+- **`event`:** (post, PT) pairs. This is the headline metric.
+- **`event_strict`:** (post, product, PT) triples.
+- **`post_detection`:** does the post contain any AE? Also reports specificity.
+
+Things to settle before trusting the numbers:
+
+- **The gold standard must be coded by people,** ideally two PV coders working independently,
+  with a third resolving disagreements. Gold labels produced by Claude would make the
+  evaluation circular.
+- **Size it for the precision you need.** With about 100 gold events, F1 is only known to about
+  ±0.08. Check the bootstrap CI before comparing two configurations.
+- **Hold out a test set.** The best-F1 threshold is tuned on the gold set, so its score is
+  optimistic. Pick the threshold on one split and report on another.
+- **Coding conventions must match.** Scoring uses exact PT matching. If coders and gold differ
+  on convention (e.g. *Vaccination site pain* vs *Injection site pain*), every such case counts
+  as both a false positive and a false negative. Agree the coding rules first. The coder
+  prompt follows the MedDRA vaccine convention of "Vaccination site …" terms.
 
 ## Cost and scale
 
@@ -127,8 +183,6 @@ it, in order:
 
 ## Known limitations and next steps
 
-- **Validation:** build a gold set of about 300 posts double-coded by PV coders. Then measure
-  recall and precision per stage and calibrate the confidence scores against it.
 - **Synonym clusters:** coders that choose different PTs for the same words (e.g. *Pyrexia*
   vs *Body temperature increased*) produce two candidate events. Grouping by HLT or SMQ, or
   adding a reconciliation step, would merge these.

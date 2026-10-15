@@ -6,12 +6,14 @@ import math
 import os
 from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from ae_signal.agents import Agents
 from ae_signal.aggregate import merge_coders, score_events
 from ae_signal.config import Config
+from ae_signal.evaluate import auroc, evaluate, load_gold, prf
 from ae_signal.meddra import MedDRA
 from ae_signal.pipeline import matched_products, run
 from ae_signal.prr import prr_2x2
@@ -186,3 +188,63 @@ def test_pipeline_end_to_end(tmp_path):
 class _NoCalls:
     def __getattr__(self, name):
         raise AssertionError("agents should not be called on resume")
+
+
+# ---- evaluation ------------------------------------------------------------
+
+GOLD = os.path.join(HERE, "..", "data", "gold_synthetic.csv")
+
+
+def test_prf():
+    assert prf(15, 0, 4) == {"tp": 15, "fp": 0, "fn": 4, "precision": 1.0, "recall": 0.7895, "f1": 0.8824}
+    assert prf(0, 0, 0)["f1"] == 0.0
+
+
+def test_auroc():
+    assert auroc(np.array([1, 1, 0, 0]), np.array([0.9, 0.8, 0.2, 0.1])) == 1.0
+    assert auroc(np.array([1, 0]), np.array([0.5, 0.5])) == 0.5
+
+
+def test_gold_accepts_llt_and_pt(meddra, tmp_path):
+    path = tmp_path / "g.csv"
+    path.write_text("post_id,pt\nA,Fever\nB,Pyrexia\nC,\nD,Not a MedDRA term\n")
+    gold, unknown = load_gold(str(path), meddra)
+    pts = gold.set_index("post_id")["pt_name"]
+    assert pts.dropna().to_dict() == {"A": "Pyrexia", "B": "Pyrexia"}
+    assert list(pts.index) == ["A", "B", "C"]
+    assert unknown == ["Not a MedDRA term"]
+
+
+def test_evaluate_against_synthetic_gold(meddra, tmp_path):
+    cfg = Config(meddra_dir=MEDDRA_DIR)
+    asyncio.run(run(POSTS, str(tmp_path), cfg, agents=FakeAgents()))
+    tables = evaluate(str(tmp_path), GOLD, meddra, threshold=0.5)
+
+    s = tables["eval_summary"].query("threshold_type == 'operating'").set_index("level")
+    # Keyword fake finds 15 of 19 gold events and invents none.
+    assert (s.loc["event", "tp"], s.loc["event", "fp"], s.loc["event", "fn"]) == (15, 0, 4)
+    assert s.loc["event", "f1"] == pytest.approx(0.8824)
+    # S013 is coded to "RSV vaccine (unspecified)" but gold says Abrysvo -> strict misses.
+    assert (s.loc["event_strict", "tp"], s.loc["event_strict", "fp"]) == (13, 2)
+    assert (s.loc["post_detection", "tp"], s.loc["post_detection", "fn"], s.loc["post_detection", "tn"]) == (10, 1, 4)
+    assert s.loc["event", "f1_ci95_low"] <= 0.8824 <= s.loc["event", "f1_ci95_high"]
+
+    errors = tables["eval_errors"]
+    assert set(errors.loc[errors.error == "false_negative", "pt_name"]) == {
+        "fatigue", "chills", "myalgia", "respiratory syncytial virus infection"}
+    agents = tables["eval_agents"].set_index(["role", "agent"])
+    assert agents.loc[("coder", 1), "f1"] == pytest.approx(0.8824)
+    assert agents.loc[("verifier", 1), "recall"] == 1.0
+    sweep = tables["eval_threshold_sweep"]
+    assert sweep.query("level == 'event' and threshold == 0.9")["tp"].item() == 0  # fake confidence is 0.872
+
+
+def test_names_only_meddra_table(tmp_path):
+    path = tmp_path / "MedDRA_28_0_AllPTsLLTs.csv"
+    path.write_text("LLT,PT\nfever,Pyrexia\nfiebre,Pyrexia\nfever,Pyrexia\nsore arm,Pain in extremity\n")
+    m = MedDRA(str(path))
+    assert m.version == "28.0" and not m.has_hierarchy
+    assert m.get("FEVER").pt_name == "Pyrexia"
+    assert m.get("Pyrexia").pt_name == "Pyrexia"  # PTs are selectable even without a same-name LLT row
+    assert m.to_pt("fiebre").pt_name == "Pyrexia"
+    assert m.search("fever", 1)[0]["pt_name"] == "Pyrexia"

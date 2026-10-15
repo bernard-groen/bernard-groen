@@ -1,7 +1,8 @@
 """CLI.
 
-  python -m ae_signal run --posts posts.csv --meddra-dir /path/to/MedAscii --out outputs/
-  python -m ae_signal prr --out outputs/ --min-confidence 0.7    # re-score without new API calls
+  python -m ae_signal run --posts posts.csv --meddra MedDRA_28_0_AllPTsLLTs.xlsx --out outputs/
+  python -m ae_signal prr --out outputs/ --min-confidence 0.7       # re-score without new API calls
+  python -m ae_signal evaluate --out outputs/ --gold gold.csv --meddra MedDRA_28_0_AllPTsLLTs.xlsx
 """
 
 from __future__ import annotations
@@ -21,8 +22,7 @@ def main() -> None:
 
     r = sub.add_parser("run", help="Process posts with the agent panel and build signal tables")
     r.add_argument("--posts", required=True, help="CSV / JSONL / XLSX with a 'text' column (post_id optional)")
-    r.add_argument("--meddra-dir", required=True, help="Directory holding llt.asc and mdhier.asc")
-    r.add_argument("--meddra-version", default="26.1")
+    r.add_argument("--meddra-version", default="28.0")
     r.add_argument("--coders", type=int, default=3)
     r.add_argument("--verifiers", type=int, default=2)
     r.add_argument("--raters", type=int, default=2)
@@ -30,16 +30,33 @@ def main() -> None:
     r.add_argument("--limit", type=int, help="Only process the first N posts")
 
     s = sub.add_parser("prr", help="Recompute PRR tables from an existing coded_events.csv")
-    s.add_argument("--meddra-dir", default="")
+    s.add_argument("--comparators", nargs="*", help="Comparator products (default: all non-target)")
+    r.add_argument("--comparators", nargs="*", help="Comparator products (default: all non-target)")
 
-    for sp in (r, s):
+    e = sub.add_parser("evaluate", help="Precision / recall / F1 of a run against a gold-standard file")
+    e.add_argument("--gold", required=True, help="CSV/XLSX: post_id, pt, [suspect_product]; empty pt = no AE")
+
+    for sp, required in ((r, True), (s, False), (e, True)):
+        sp.add_argument("--meddra", "--meddra-dir", dest="meddra", required=required, default="",
+                        help="MedDRA ASCII directory, or an LLT/PT table such as MedDRA_28_0_AllPTsLLTs.xlsx")
         sp.add_argument("--out", default="outputs")
-        sp.add_argument("--min-confidence", type=float, default=0.5)
-        sp.add_argument("--comparators", nargs="*", help="Comparator products (default: all non-target)")
+        sp.add_argument("--min-confidence", type=float, default=0.5,
+                        help="Operating threshold for PRR tables and headline evaluation metrics")
 
     args = p.parse_args()
-    cfg = Config(meddra_dir=args.meddra_dir, min_confidence=args.min_confidence,
-                 comparator_products=args.comparators or None)
+    cfg = Config(meddra_dir=args.meddra, min_confidence=args.min_confidence,
+                 comparator_products=getattr(args, "comparators", None) or None)
+
+    if args.cmd == "evaluate":
+        from .evaluate import evaluate
+        from .meddra import MedDRA
+        tables = evaluate(args.out, args.gold, MedDRA(args.meddra), args.min_confidence)
+        pd.set_option("display.width", 200)
+        print(tables["eval_summary"].to_string(index=False))
+        if "eval_agents" in tables:
+            print("\nAgent competency:\n" + tables["eval_agents"].to_string(index=False))
+        print(f"\nEvaluation tables written to {args.out}/eval_*.csv")
+        return
 
     if args.cmd == "run":
         cfg.meddra_version = args.meddra_version
@@ -47,7 +64,7 @@ def main() -> None:
         cfg.concurrency = args.concurrency
         tables = asyncio.run(run(args.posts, args.out, cfg, limit=args.limit))
     else:
-        events = pd.read_csv(f"{args.out}/coded_events.csv", dtype={"pt_code": str, "soc_code": str})
+        events = pd.read_csv(f"{args.out}/coded_events.csv", dtype={"post_id": str, "pt_code": str, "soc_code": str})
         tables = signal_tables(events, args.out, cfg)
 
     prr = tables.get("prr_pt")

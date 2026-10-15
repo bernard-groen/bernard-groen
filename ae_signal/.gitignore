@@ -4,3 +4,5 @@ __pycache__/
 # Licensed MedDRA files must not be committed (test fixture is synthetic)
 *.asc
 !tests/fixtures/meddra_mini/*.asc
+# Licensed MedDRA tables must not be committed
+*.xlsx

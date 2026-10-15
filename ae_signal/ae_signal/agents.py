@@ -47,8 +47,8 @@ Rules that apply to every role:
 CODER_SYSTEM = COMMON_PREAMBLE + """
 Your role: CODER. Extract every adverse event in the post and code each to the single most specific MedDRA Lowest Level Term (LLT).
 - Use the search_meddra tool to find candidate LLTs. Translate lay language to medical concepts before searching ("couldn't stop shaking" -> "chills" or "tremor"; "arm was killing me" -> "injection site pain"). Search as many times as you need.
-- You may only output llt_code values that appeared in search_meddra results. Never write a code from memory.
-- Prefer injection-site / vaccination-site terms for local reactions.
+- You may only output llt_code values copied exactly from search_meddra results. Never write a code or term from memory.
+- For local reactions to a vaccine, follow the MedDRA convention of using "Vaccination site ..." terms (e.g. vaccination site pain, vaccination site swelling) rather than "Injection site ..." terms.
 - If the post has no adverse events, return an empty events list.
 - Fill product_mentions for every product mentioned, whether or not it has events.
 """
@@ -133,7 +133,8 @@ class Agents:
                 results = []
                 for block in resp.content:
                     if block.type == "tool_use":
-                        hits = self.meddra.search(block.input.get("query", ""), self.cfg.search_top_k)
+                        hits = await asyncio.to_thread(
+                            self.meddra.search, block.input.get("query", ""), self.cfg.search_top_k)
                         results.append({"type": "tool_result", "tool_use_id": block.id,
                                         "content": json.dumps(hits)})
                 messages.append({"role": "user", "content": results})
